@@ -161,7 +161,14 @@ joyviz.get_url_params = function() {
     var res = {};
     for (var i in params) {
         var keyvalue = params[i].split("=");
-        res[keyvalue[0]] = decodeURI(keyvalue[1]);
+        var key = keyvalue[0];
+        var value = keyvalue[1];
+
+        // Changed: use decodeURIComponent so encoded direct-link payloads decode correctly.
+        try { key = decodeURIComponent(key); } catch (e) {}
+        try { value = decodeURIComponent(value); } catch (e) {}
+
+        res[key] = value;
     }
     return res;
 }

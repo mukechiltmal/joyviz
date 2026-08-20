@@ -3,7 +3,14 @@ Joystick Visualizer is an offline version based on the code of Anton Natarov (ht
 
 Original application can be found here (https://tealyatinasite.appspot.com/joystick/)
 
-Original documentation can be found here (https://web.archive.org/web/20220818185347/http://www.teall.info/2019/03/joystick-visualizer.html)
+Original documentation can be found here (https://web.archive.org/web/20220818185347/http://www.teall.info/2019/03/joystick-visualizer.html)"
+
+ changes made with QWEN 3.8 27B in LMStudio with VS Code, Prompt:
+ hi analyse the respository , it is a javascript code for browser based device axis and button overlay. 
+ I can be integrated into obs for example to show how the conbtroler oder joystick is used in real time. Please do the following changes:
+- update the code to beable to handle more than 4 deivces when not using a chrome based browser
+- keep the numbering of the devices but the overlay is bound to the hardware ID of the selected device. 
+When regeneration the overlay the number should be define from the hardware ID so that the overlay is kept konstant even if the order of the devices changes"
 */
 "use strict";
 
@@ -41,6 +48,309 @@ var movable_el = undefined;
 var dd = 0.5;
 
 var saved_presets = { series: {}, last: undefined };
+
+/*
+    Added: stable device identification and enumeration helpers.
+
+    The visible gamepad list is still limited to 4 in Chromium-based browsers.
+    In non-Chromium browsers all connected gamepads are used.
+
+    Widget bindings are stored using the Gamepad hardware ID.
+    A stable display number is derived from that hardware ID, so the
+    numbering does not depend on the order in which devices are reported.
+*/
+function escape_html(text) {
+    var s = String(text);
+    return s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function is_chromium_browser() {
+    var ua = navigator.userAgent || '';
+    return /Edg\//.test(ua) ||
+        /OPR\//.test(ua) ||
+        /Chrome\/\d+/.test(ua) ||
+        /Chromium\/\d+/.test(ua);
+}
+
+function get_gamepad_limit() {
+    return is_chromium_browser() ? 4 : Infinity;
+}
+
+function get_visible_gamepads() {
+    if (!navigator.getGamepads) return [];
+
+    var all = navigator.getGamepads();
+    var pads = [];
+    for (var i = 0; i < all.length; ++i) {
+        if (all[i] && all[i].connected) pads.push(all[i]);
+    }
+
+    var limit = get_gamepad_limit();
+    if (limit !== Infinity && pads.length > limit) {
+        pads = pads.slice(0, limit);
+    }
+
+    return pads;
+}
+
+function stable_device_number(id) {
+    // Deterministic 32-bit FNV-1a hash used only for stable display numbering.
+    var str = String(id || '');
+    var h = 0x811c9dc5;
+
+    for (var i = 0; i < str.length; ++i) {
+        h ^= str.charCodeAt(i);
+        h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+        h = h >>> 0;
+    }
+
+    return h === 0 ? 1 : h;
+}
+
+function truncate_device_id(id) {
+    var s = String(id || '');
+    if (s.length > 40) {
+        return s.substring(0, 37) + '...';
+    }
+    return s;
+}
+
+function get_device_label(id) {
+    return 'Device ' + stable_device_number(id);
+}
+
+function refs_equal(a, b) {
+    if (a === b) return true;
+    return String(a) === String(b);
+}
+
+function get_gamepad_by_number(num) {
+    if (num === undefined || num === null || isNaN(num) || num === 0) {
+        return undefined;
+    }
+
+    var pads = get_visible_gamepads();
+
+    // First try the new stable-number mapping.
+    for (var i = 0; i < pads.length; ++i) {
+        if (stable_device_number(pads[i].id) === num) {
+            return pads[i];
+        }
+    }
+
+    // Fallback: legacy 1-based joystick number from older presets.
+    var idx = Math.round(num) - 1;
+    if (idx >= 0 && idx < pads.length) {
+        return pads[idx];
+    }
+
+    // Extra fallback: some browsers expose the original index explicitly.
+    for (i = 0; i < pads.length; ++i) {
+        if (typeof pads[i].index === 'number' && pads[i].index === idx) {
+            return pads[i];
+        }
+    }
+
+    return undefined;
+}
+
+function get_gamepad_by_ref(ref) {
+    if (ref === undefined || ref === null || ref === '' || ref === 0 || ref === false) {
+        return undefined;
+    }
+
+    // Preferred: exact hardware ID match.
+    if (typeof ref === 'string') {
+        var pads = get_visible_gamepads();
+        for (var i = 0; i < pads.length; ++i) {
+            if (pads[i].id === ref) {
+                return pads[i];
+            }
+        }
+
+        // Allow legacy numeric strings, but only after exact ID matching.
+        if (/^\d+$/.test(ref)) {
+            return get_gamepad_by_number(parseInt(ref, 10));
+        }
+
+        return undefined;
+    }
+
+    if (typeof ref === 'number') {
+        return get_gamepad_by_number(ref);
+    }
+
+    return undefined;
+}
+
+function get_gamepad_axis_data(device_ref, axis_number) {
+    var gp = get_gamepad_by_ref(device_ref);
+    if (!gp) return undefined;
+
+    var idx = parseInt(axis_number, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= gp.axes.length) {
+        return undefined;
+    }
+
+    return gp.axes[idx];
+}
+
+function get_gamepad_button_data(device_ref, button_number) {
+    var gp = get_gamepad_by_ref(device_ref);
+    if (!gp) return false;
+
+    var idx = parseInt(button_number, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= gp.buttons.length) {
+        return false;
+    }
+
+    return gp.buttons[idx].pressed;
+}
+
+function normalize_selected_device_ref(ref) {
+    if (ref === undefined || ref === null || ref === '' || ref === 0 || ref === false) {
+        return '';
+    }
+
+    var gp = get_gamepad_by_ref(ref);
+    if (gp) {
+        return gp.id;
+    }
+
+    return String(ref);
+}
+
+function get_device_list_items(selected_ref) {
+    var items = [];
+    var pads = get_visible_gamepads();
+    var found = false;
+
+    for (var i = 0; i < pads.length; ++i) {
+        var id = pads[i].id;
+        var label = get_device_label(id) + ' - ' + truncate_device_id(id);
+        items.push([id, label]);
+
+        if (refs_equal(id, selected_ref)) {
+            found = true;
+        }
+    }
+
+    if (selected_ref !== '' && selected_ref !== undefined && !found) {
+        var unknown_label = 'Device ' +
+            (typeof selected_ref === 'number' ? selected_ref : stable_device_number(selected_ref)) +
+            ' (not currently connected)';
+        items.push([String(selected_ref), unknown_label]);
+    }
+
+    if (items.length === 0) {
+        items.push(['', 'No devices connected']);
+    }
+
+    return items;
+}
+
+function read_device_ref(input) {
+    // Read the raw device ID from the list input. This avoids numeric parsing
+    // of non-numeric hardware IDs.
+    if (input && input.getAttribute) {
+        var v = input.getAttribute('value');
+        if (v !== null && v !== undefined) {
+            return v;
+        }
+    }
+    return $t.gui.input_value(input);
+}
+
+function append_table_row(table, label, input) {
+    var tr = $t.element('tr', {}, table);
+    $t.element('td', {}, tr, label);
+    $t.inner(input, $t.element('td', {}, tr));
+}
+
+function append_number_row(table, label, value) {
+    append_table_row(table, label, $t.gui.make_input('number', value === undefined ? 0 : value));
+}
+
+function append_bool_row(table, label, value) {
+    append_table_row(table, label, $t.gui.make_input('bool', value ? 1 : 0));
+}
+
+function append_widget_axis_section(container, widget, prs) {
+    $t.inner($t.element('hr'), container);
+
+    var title = (prs[0] == 'button') ? 'Button' : 'Axis ' + prs[1].toUpperCase();
+    $t.element('b', {}, container, title);
+
+    var link;
+    if (prs[0] == 'button') {
+        if (!widget.params.but) {
+            widget.params.but = [0, 0, 0];
+        }
+        link = widget.params.but;
+    } else {
+        if (!widget.params.link) {
+            widget.params.link = {};
+        }
+        if (!widget.params.link[prs[1]]) {
+            widget.params.link[prs[1]] = [0, 0];
+        }
+        link = widget.params.link[prs[1]];
+    }
+
+    var selected_ref = normalize_selected_device_ref(link[0]);
+    var device_items = get_device_list_items(selected_ref);
+
+    var table = $t.element('table', { 'class': 'ui-table' }, container);
+
+    append_table_row(table, 'Device', $t.gui.make_input('list', selected_ref, device_items));
+    append_number_row(table, prs[0] == 'button' ? 'Button number' : 'Axis number',
+        link[1] === undefined ? 0 : link[1]);
+
+    if (prs[0] == 'axis') {
+        if (!widget.params.diapason) {
+            widget.params.diapason = {};
+        }
+        if (!widget.params.diapason[prs[1]]) {
+            widget.params.diapason[prs[1]] = [-1.0, 1.0, 0, 0];
+        }
+        var diapason = widget.params.diapason[prs[1]];
+
+        append_number_row(table, 'Axis diapason min', diapason[0] === undefined ? 0 : diapason[0]);
+        append_number_row(table, 'Axis diapason max', diapason[1] === undefined ? 1 : diapason[1]);
+        append_bool_row(table, 'Invert', diapason[2]);
+        append_bool_row(table, 'Hide dashed line', diapason[3]);
+    } else if (prs[0] == 'axis_but') {
+        if (!widget.params.diapason) {
+            widget.params.diapason = {};
+        }
+        if (!widget.params.diapason[prs[1]]) {
+            widget.params.diapason[prs[1]] = [-0.5, 0.5, 0];
+        }
+        var diapason = widget.params.diapason[prs[1]];
+
+        append_number_row(table, 'Activation diapason min', diapason[0] === undefined ? 0 : diapason[0]);
+        append_number_row(table, 'Activation diapason max', diapason[1] === undefined ? 1 : diapason[1]);
+        append_bool_row(table, 'Invert', diapason[2]);
+    }
+}
+
+function base64_encode_url_string(str) {
+    try {
+        if (typeof btoa === 'function') {
+            return btoa(unescape(encodeURIComponent(str)));
+        }
+    } catch (e) {
+    }
+    return null;
+}
+
+function base64_decode_url_string(str) {
+    return decodeURIComponent(escape(atob(str)));
+}
 
 function make_movable(el) {
     $t.bind(el, 'mousedown', function(ev) {
@@ -82,28 +392,21 @@ function show_joysticks_dialog() {
         },
         'X': function(d) { dialog_active = false; $t.gui.dialog_remove(d[0]); }
     });
-    for (var i = 0; i < 4; ++i) {
-        $t.element('b', {}, d[1], "Joystick " + (i + 1));
-        $t.element('br', {}, d[1]);
-        $t.element('div', { id: 'joyinfo' + i }, d[1], "");
-        $t.element('br', {}, d[1]);
-    }
 
-    function update_joy(joy, el) {
-        if (!dialog_active) return;
-        if (!joy) {
-            el.innerHTML = '<i>not plugged</i>';
-            return;
-        }
+    var list = $t.element('div', {}, d[1]);
+
+    function make_joy_html(joy) {
         var buttons = [];
         var bn = 0;
         for (var b in joy.buttons) {
             ++bn;
-            if (joy.buttons[b].pressed)
+            if (joy.buttons[b].pressed) {
                 buttons.push('<span style="padding: 1px 4px; margin: 2px; background: black; color: white"><b>' + bn + '</b></span>');
-            else
+            } else {
                 buttons.push('<span style="padding: 1px 4px; margin: 2px"><b>' + bn + '</b></span>');
+            }
         }
+
         var axes = [];
         var an = 0;
         for (var a in joy.axes) {
@@ -111,16 +414,35 @@ function show_joysticks_dialog() {
             var val = joy.axes[a].toFixed(1);
             axes.push('<span style="padding: 1px 4px; margin: 2px"><b>' + an + '</b>: <span style="background: lightgray; padding: 2px; width: 35px; display: inline-block">' + val + '</span></span>');
         }
-        var name = 'Name: <span style="padding: 8px 4px; margin: 2px">' + joy.id + '</span><div style="height: 4px"></div>';
-        el.innerHTML = name + 'Buttons: ' + buttons.join('') + '<div style="height: 6px"></div>Axes: ' + axes.join('');
+
+        var name = 'Device ' + stable_device_number(joy.id) +
+            (typeof joy.index === 'number' ? ' (browser index ' + (joy.index + 1) + ')' : '') +
+            ': <span style="padding: 8px 4px; margin: 2px">' + escape_html(joy.id) + '</span><div style="height: 4px"></div>';
+
+        return name +
+            'Buttons: ' + buttons.join('') +
+            '<div style="height: 6px"></div>Axes: ' + axes.join('');
     }
 
     function update_info() {
-        var joys = navigator.getGamepads();
-        for (var i = 0; i < 4; ++i) {
-            update_joy(joys[i], $t.id('joyinfo' + i));
+        if (!dialog_active) return;
+
+        $t.empty(list);
+
+        var pads = get_visible_gamepads();
+        if (pads.length === 0) {
+            list.innerHTML = '<i>not plugged</i>';
+        } else {
+            for (var i = 0; i < pads.length; ++i) {
+                var el = $t.element('div', {}, list);
+                el.innerHTML = make_joy_html(pads[i]);
+                if (i < pads.length - 1) {
+                    $t.element('br', {}, list);
+                }
+            }
         }
-        if (dialog_active) requestAnimationFrame(update_info);
+
+        requestAnimationFrame(update_info);
     }
 
     requestAnimationFrame(update_info);
@@ -139,87 +461,80 @@ function show_widget_properties_dialog(widget) {
             var ii = d[1].getElementsByClassName('dialog-input');
             var pr = edit_params[widget.widtype];
             var c = 0;
+
             for (var i in pr.params) {
                 var param = pr.params[i];
                 widget.params[param[1]] = $t.gui.input_value(ii[c++]);
             }
+
+            if (!widget.params.link) {
+                widget.params.link = {};
+            }
+            if (!widget.params.diapason) {
+                widget.params.diapason = {};
+            }
+
             for (var i in pr.axis) {
                 var prs = pr.axis[i];
+
                 if (prs[0] == 'axis') {
-                    widget.params['link'][prs[1]] =
-                        [$t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++])];
-                    widget.params.diapason[prs[1]] = 
-                        [$t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++]),
-                        $t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++])];
+                    widget.params['link'][prs[1]] = [
+                        read_device_ref(ii[c++]),
+                        $t.gui.input_value(ii[c++])
+                    ];
+                    widget.params.diapason[prs[1]] = [
+                        $t.gui.input_value(ii[c++]),
+                        $t.gui.input_value(ii[c++]),
+                        $t.gui.input_value(ii[c++]),
+                        $t.gui.input_value(ii[c++])
+                    ];
                 }
+
                 if (prs[0] == 'axis_but') {
-                    widget.params['link'][prs[1]] =
-                        [$t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++])];
-                    widget.params.diapason[prs[1]] = 
-                        [$t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++]),
-                        $t.gui.input_value(ii[c++])];
+                    widget.params['link'][prs[1]] = [
+                        read_device_ref(ii[c++]),
+                        $t.gui.input_value(ii[c++])
+                    ];
+                    widget.params.diapason[prs[1]] = [
+                        $t.gui.input_value(ii[c++]),
+                        $t.gui.input_value(ii[c++]),
+                        $t.gui.input_value(ii[c++])
+                    ];
                 }
+
                 if (prs[0] == 'axis_hat') {
-                    widget.params['link'][prs[1]] =
-                        [$t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++])];
+                    widget.params['link'][prs[1]] = [
+                        read_device_ref(ii[c++]),
+                        $t.gui.input_value(ii[c++])
+                    ];
                 }
+
                 if (prs[0] == 'button') {
-                    widget.params['but'] = 
-                        [$t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++]), $t.gui.input_value(ii[c++])];
+                    widget.params['but'] = [
+                        read_device_ref(ii[c++]),
+                        $t.gui.input_value(ii[c++]),
+                        $t.gui.input_value(ii[c++])
+                    ];
                 }
             }
+
             $t.gui.dialog_remove(d[0]); dialog_active = false;
             rewrite_widget(widget, widget.params);
         },
         'X': function(d) { $t.gui.dialog_remove(d[0]); dialog_active = false; }
     });
+
     var params = {};
     var pr = edit_params[widget.widtype];
     for (var i in pr.params) {
         var param = pr.params[i];
         params[param[0]] = widget.params[param[1]];
     }
+
     $t.inner($t.gui.make_table_inputs(params), d[1]);
+
     for (var i in pr.axis) {
-        var prs = pr.axis[i];
-        if (prs[0] == 'axis') {
-            $t.inner($t.element('hr'), d[1]);
-            $t.element('b', {}, d[1], 'Axis ' + prs[1].toUpperCase());
-            var link = widget.params['link'];
-            if (!link[prs[1]]) link[prs[1]] = [0, 0];
-            var diapason = widget.params.diapason[prs[1]];
-            var params = { '([number,number])Joystick and axis number': [link[prs[1]][0], link[prs[1]][1]],
-                '([number,number])Axis diapason': [diapason[0], diapason[1]],
-                '(bool)Invert': diapason[2], '(bool)Hide dashed line': diapason[3] };
-            $t.inner($t.gui.make_table_inputs(params), d[1]);
-        }
-        if (prs[0] == 'axis_but') {
-            $t.inner($t.element('hr'), d[1]);
-            $t.element('b', {}, d[1], 'Axis ' + prs[1].toUpperCase());
-            var link = widget.params['link'];
-            if (!link[prs[1]]) link[prs[1]] = [0, 0];
-            var diapason = widget.params.diapason[prs[1]];
-            var params = { '([number,number])Joystick and axis number': [link[prs[1]][0], link[prs[1]][1]],
-                '([number,number])Button activation diapason': [diapason[0], diapason[1]],
-                '(bool)Invert': diapason[2] };
-            $t.inner($t.gui.make_table_inputs(params), d[1]);
-        }
-        if (prs[0] == 'axis_hat') {
-            $t.inner($t.element('hr'), d[1]);
-            $t.element('b', {}, d[1], 'Axis ' + prs[1].toUpperCase());
-            var link = widget.params['link'];
-            if (!link[prs[1]]) link[prs[1]] = [0, 0];
-            var params = { '([number,number])Joystick and axis number': [link[prs[1]][0], link[prs[1]][1]] };
-            $t.inner($t.gui.make_table_inputs(params), d[1]);
-        }
-        if (prs[0] == 'button') {
-            $t.inner($t.element('hr'), d[1]);
-            $t.element('b', {}, d[1], 'Button');
-            var but = widget.params['but'];
-            if (!but) but = widget.params['but'] = [0, 0, 0];
-            var params = { '([number,number])Joystick and button number': [but[0], but[1]], '(bool)Invert': but[2] };
-            $t.inner($t.gui.make_table_inputs(params), d[1]);
-        }
+        append_widget_axis_section(d[1], widget, pr.axis[i]);
     }
 }
 
@@ -796,39 +1111,69 @@ function serialize_url(widgets) {
     var ss = [main_color, back_color, use_shadows, shadow_color, thick_stroke, thin_stroke, label_font, global_widget_size, label_font_size, button_font_size, fade_at_axis_center, table_color, chromakey_color, fade_zone, global_widget_radius,];
 
     var res = JSON.stringify([ws, ss]);
+
+    // Changed: prefer safe base64 URL payload. Legacy fallback is kept below.
+    var encoded = base64_encode_url_string(res);
+    if (encoded) {
+        return 'b64:' + encoded;
+    }
+
     res = res.replace(/-/g, ';');
     res = res.replace(/,/g, '-');
     console.log(res);
     return res;
 }
+
 function deserialize_url(str, container) {
     clear_widgets();
-        str = str.replace(/-/g, ',');
-        str = str.replace(/;/g, '-');
-        console.log(str);
-        var res = JSON.parse(str);
-        if (res[1][0] != undefined) main_color = res[1][0];
-        if (res[1][1] != undefined) back_color = res[1][1];
-        if (res[1][2] != undefined) use_shadows = res[1][2];
-        if (res[1][3] != undefined) shadow_color = res[1][3];
-        if (res[1][4] != undefined) thick_stroke = res[1][4];
-        if (res[1][5] != undefined) thin_stroke = res[1][5];
-        if (res[1][6] != undefined) label_font = res[1][6];
-        if (res[1][7] != undefined) global_widget_size = res[1][7];
-        if (res[1][8] != undefined) label_font_size = res[1][8];
-        if (res[1][9] != undefined) button_font_size = res[1][9];
-        if (res[1][10] != undefined) fade_at_axis_center = res[1][10];
-        if (res[1][11] != undefined) table_color = res[1][11];
-        if (res[1][12] != undefined) chromakey_color = res[1][12];
-        if (res[1][13] != undefined) fade_zone = res[1][13];
-        if (res[1][14] != undefined) global_widget_radius = res[1][14];
-        document.body.style['background-color'] = table_color;
-        for (var i in res[0]) {
-            var w = res[0][i];
-            var widtype = Object.keys(widget_factory)[w[0]];
-            add_widget(container, widtype, widget_deserializator[widtype](w), w[1], w[2]);
+
+    var res;
+    try {
+        if (typeof str === 'string' && str.indexOf('b64:') === 0) {
+            res = JSON.parse(base64_decode_url_string(str.substring(4)));
+        } else {
+            try {
+                res = JSON.parse(str);
+            } catch (e) {
+                // Legacy URL format fallback.
+                str = String(str);
+                str = str.replace(/-/g, ',');
+                str = str.replace(/;/g, '-');
+                res = JSON.parse(str);
+            }
         }
-        $t.id('seria_name').innerHTML = 'preset: ' + saved_presets.last;
+    } catch (e) {
+        return;
+    }
+
+    if (!res || !res[0] || !res[1]) {
+        return;
+    }
+
+    if (res[1][0] != undefined) main_color = res[1][0];
+    if (res[1][1] != undefined) back_color = res[1][1];
+    if (res[1][2] != undefined) use_shadows = res[1][2];
+    if (res[1][3] != undefined) shadow_color = res[1][3];
+    if (res[1][4] != undefined) thick_stroke = res[1][4];
+    if (res[1][5] != undefined) thin_stroke = res[1][5];
+    if (res[1][6] != undefined) label_font = res[1][6];
+    if (res[1][7] != undefined) global_widget_size = res[1][7];
+    if (res[1][8] != undefined) label_font_size = res[1][8];
+    if (res[1][9] != undefined) button_font_size = res[1][9];
+    if (res[1][10] != undefined) fade_at_axis_center = res[1][10];
+    if (res[1][11] != undefined) table_color = res[1][11];
+    if (res[1][12] != undefined) chromakey_color = res[1][12];
+    if (res[1][13] != undefined) fade_zone = res[1][13];
+    if (res[1][14] != undefined) global_widget_radius = res[1][14];
+    document.body.style['background-color'] = table_color;
+
+    for (var i in res[0]) {
+        var w = res[0][i];
+        var widtype = Object.keys(widget_factory)[w[0]];
+        add_widget(container, widtype, widget_deserializator[widtype](w), w[1], w[2]);
+    }
+
+    $t.id('seria_name').innerHTML = saved_presets.last ? 'preset: ' + saved_presets.last : '';
 }
 
 function serialize(widgets) {
@@ -887,30 +1232,37 @@ function deserialize(str, container) {
 }
 
 function auto_update() {
-    var joys = navigator.getGamepads();
-
-    function get_axis_data(addr) {
-        try { return joys[addr[0] - 1].axes[addr[1] - 1]; }
-        catch (e) { return undefined; }
-    }
-
-    function get_button_data(addr) {
-        try { return joys[addr[0] - 1].buttons[addr[1] - 1].pressed; }
-        catch (e) { return false; }
-    }
-
     for (var i in widgets) {
         var widget = widgets[i];
         var link = widget.params.link;
-        var res = {}, got = false;
-        for (var l in link) {
-            var data = get_axis_data(link[l]);
-            if (data != undefined) { res[l] = data; got = true; }
+        var res = {};
+        var got = false;
+
+        if (link) {
+            for (var l in link) {
+                var addr = link[l];
+                var data = get_gamepad_axis_data(
+                    addr ? addr[0] : undefined,
+                    addr ? addr[1] : undefined
+                );
+
+                if (data != undefined) {
+                    res[l] = data;
+                    got = true;
+                }
+            }
         }
-        if (got) animate_params[widget.widtype](widget.params, res);
+
+        if (got && animate_params[widget.widtype]) {
+            animate_params[widget.widtype](widget.params, res);
+        }
+
         var but = widget.params.but;
-        if (but) animate_params[widget.widtype](widget.params, get_button_data(but));
+        if (but && animate_params[widget.widtype]) {
+            animate_params[widget.widtype](widget.params, get_gamepad_button_data(but[0], but[1]));
+        }
     }
+
     requestAnimationFrame(auto_update);
 }
 

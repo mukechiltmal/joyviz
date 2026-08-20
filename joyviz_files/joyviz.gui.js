@@ -2,7 +2,8 @@
 (function(sd) {
     this.input_value = function(input, min, max) {
         if (input.classList.contains('small-input-tree')) {
-            return parseFloat(input.getAttribute('value'));
+            // Changed: return the raw list/tree value so non-numeric device IDs work.
+            return input.getAttribute('value');
         }
         if (input.classList.contains('small-input-mask')) {
             return parseFloat(input.getAttribute('value'));
