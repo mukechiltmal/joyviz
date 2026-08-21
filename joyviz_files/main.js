@@ -386,18 +386,24 @@ function switch_global_run() {
 function show_joysticks_dialog() {
     if (dialog_active) return;
     dialog_active = true;
+
     var d = $t.gui.dialog_buttons("Joysticks", {
         'OK': function(d) {
-            dialog_active = false; $t.gui.dialog_remove(d[0]);
+            dialog_active = false;
+            $t.gui.dialog_remove(d[0]);
         },
-        'X': function(d) { dialog_active = false; $t.gui.dialog_remove(d[0]); }
+        'X': function(d) {
+            dialog_active = false;
+            $t.gui.dialog_remove(d[0]);
+        }
     });
 
     var list = $t.element('div', {}, d[1]);
 
-    function make_joy_html(joy) {
+    function make_joy_html(joy, display_number) {
         var buttons = [];
         var bn = 0;
+
         for (var b in joy.buttons) {
             ++bn;
             if (joy.buttons[b].pressed) {
@@ -409,13 +415,14 @@ function show_joysticks_dialog() {
 
         var axes = [];
         var an = 0;
+
         for (var a in joy.axes) {
             ++an;
             var val = joy.axes[a].toFixed(1);
             axes.push('<span style="padding: 1px 4px; margin: 2px"><b>' + an + '</b>: <span style="background: lightgray; padding: 2px; width: 35px; display: inline-block">' + val + '</span></span>');
         }
 
-        var name = 'Device ' + stable_device_number(joy.id) +
+        var name = 'Device ' + display_number +
             (typeof joy.index === 'number' ? ' (browser index ' + (joy.index + 1) + ')' : '') +
             ': <span style="padding: 8px 4px; margin: 2px">' + escape_html(joy.id) + '</span><div style="height: 4px"></div>';
 
@@ -430,12 +437,14 @@ function show_joysticks_dialog() {
         $t.empty(list);
 
         var pads = get_visible_gamepads();
+
         if (pads.length === 0) {
             list.innerHTML = '<i>not plugged</i>';
         } else {
             for (var i = 0; i < pads.length; ++i) {
                 var el = $t.element('div', {}, list);
-                el.innerHTML = make_joy_html(pads[i]);
+                el.innerHTML = make_joy_html(pads[i], i + 1);
+
                 if (i < pads.length - 1) {
                     $t.element('br', {}, list);
                 }
