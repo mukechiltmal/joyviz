@@ -1,12 +1,16 @@
 "use strict";
 (function(sd) {
     this.input_value = function(input, min, max) {
+        // Added: guard for undefined inputs so dialogs can fail soft.
+        if (!input) return undefined;
+
         if (input.classList.contains('small-input-tree')) {
             // Changed: return the raw list/tree value so non-numeric device IDs work.
             return input.getAttribute('value');
         }
         if (input.classList.contains('small-input-mask')) {
-            return parseFloat(input.getAttribute('value'));
+            var mv = parseFloat(input.getAttribute('value'));
+            return isNaN(mv) ? 0 : mv;
         }
         if (input.getAttribute('data-pattern') == 'ip') {
             var parts = input.value.split('.');

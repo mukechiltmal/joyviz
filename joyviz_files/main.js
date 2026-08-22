@@ -123,6 +123,32 @@ function get_device_label(id) {
     return 'Device ' + stable_device_number(id);
 }
 
+// Added: format an 0-255 opacity value as exactly two hex digits.
+function hex2(value) {
+    var v = Math.round(Number(value) || 0);
+    if (v < 0) v = 0;
+    if (v > 255) v = 255;
+    var s = v.toString(16);
+    if (s.length < 2) s = '0' + s;
+    return s;
+}
+
+// Added: safe localStorage helpers so blocked storage does not break the UI.
+function persist_presets() {
+    try {
+        localStorage.setItem('saved_presets', JSON.stringify(saved_presets));
+    } catch (e) {
+    }
+}
+
+function load_presets_local() {
+    try {
+        return localStorage.getItem('saved_presets');
+    } catch (e) {
+        return null;
+    }
+}
+
 function refs_equal(a, b) {
     if (a === b) return true;
     return String(a) === String(b);
@@ -310,6 +336,11 @@ function append_widget_axis_section(container, widget, prs) {
     append_number_row(table, prs[0] == 'button' ? 'Button number' : 'Axis number',
         link[1] === undefined ? 0 : link[1]);
 
+    // Added: Button inversion was used by the runtime but missing from the dialog.
+    if (prs[0] == 'button') {
+        append_bool_row(table, 'Invert', link[2]);
+    }
+
     if (prs[0] == 'axis') {
         if (!widget.params.diapason) {
             widget.params.diapason = {};
@@ -443,7 +474,9 @@ function show_joysticks_dialog() {
         } else {
             for (var i = 0; i < pads.length; ++i) {
                 var el = $t.element('div', {}, list);
-                el.innerHTML = make_joy_html(pads[i], i + 1);
+
+                // Changed: use the stable hardware-ID-derived number instead of the raw array position.
+                el.innerHTML = make_joy_html(pads[i], stable_device_number(pads[i].id));
 
                 if (i < pads.length - 1) {
                     $t.element('br', {}, list);
@@ -578,9 +611,9 @@ function show_settings_dialog() {
             var c = 0;
             main_color = $t.gui.input_value(ii[c++]);
             global_widget_radius = $t.gui.input_value(ii[c++], 0, 10);
-            back_color = $t.gui.input_value(ii[c++]) + $t.gui.input_value(ii[c++], 0, 255).toString(16);
+            back_color = $t.gui.input_value(ii[c++]) + hex2($t.gui.input_value(ii[c++], 0, 255));
             use_shadows = $t.gui.input_value(ii[c++]);
-            shadow_color = $t.gui.input_value(ii[c++]) + $t.gui.input_value(ii[c++], 0, 255).toString(16);
+            shadow_color = $t.gui.input_value(ii[c++]) + hex2($t.gui.input_value(ii[c++], 0, 255));
             thick_stroke = $t.gui.input_value(ii[c++], 0, 40);
             thin_stroke = $t.gui.input_value(ii[c++], 0, 40);
             label_font = $t.gui.input_value(ii[c++]);
@@ -630,7 +663,7 @@ function show_save_dialog() {
             var name = $t.gui.input_value(ii[0]);
             try { delete saved_presets.series[name]; } catch (e) {}
             saved_presets.last = undefined;
-            localStorage.setItem('saved_presets', JSON.stringify(saved_presets));
+            persist_presets();
             clear_widgets();
             $t.gui.dialog_remove(d[0]); dialog_active = false;
         },
@@ -660,7 +693,7 @@ function show_save_dialog() {
             if (name == '') return;
             saved_presets.series[name] = seria;
             saved_presets.last = name;
-            localStorage.setItem('saved_presets', JSON.stringify(saved_presets));
+            persist_presets();
             $t.gui.dialog_remove(d[0]); dialog_active = false;
             $t.id('seria_name').innerHTML = 'preset: ' + saved_presets.last;
         },
@@ -682,7 +715,7 @@ function show_load_dialog() {
             var name = Object.keys(saved_presets.series)[nameid];
             try { delete saved_presets.series[name]; } catch (e) {}
             saved_presets.last = undefined;
-            localStorage.setItem('saved_presets', JSON.stringify(saved_presets));
+            persist_presets();
             clear_widgets();
             $t.gui.dialog_remove(d[0]); dialog_active = false;
         },
@@ -709,7 +742,7 @@ function show_load_dialog() {
             var nameid = $t.gui.input_value(ii[0]);
             var key = Object.keys(saved_presets.series)[nameid];
             saved_presets.last = key;
-            localStorage.setItem('saved_presets', JSON.stringify(saved_presets));
+            persist_presets();
             deserialize(saved_presets.series[key], document.body);
             $t.gui.dialog_remove(d[0]); dialog_active = false;
         },
@@ -1134,8 +1167,6 @@ function serialize_url(widgets) {
 }
 
 function deserialize_url(str, container) {
-    clear_widgets();
-
     var res;
     try {
         if (typeof str === 'string' && str.indexOf('b64:') === 0) {
@@ -1158,6 +1189,9 @@ function deserialize_url(str, container) {
     if (!res || !res[0] || !res[1]) {
         return;
     }
+
+    // Added: only clear existing widgets after the payload has been validated.
+    clear_widgets();
 
     if (res[1][0] != undefined) main_color = res[1][0];
     if (res[1][1] != undefined) back_color = res[1][1];
@@ -1213,31 +1247,43 @@ function serialize(widgets) {
 }
 
 function deserialize(str, container) {
-    clear_widgets();
+    var res;
     try {
-        var res = JSON.parse(str);
-        if (res.settings.main_color != undefined) main_color = res.settings.main_color;
-        if (res.settings.back_color != undefined) back_color = res.settings.back_color;
-        if (res.settings.use_shadows != undefined) use_shadows = res.settings.use_shadows;
-        if (res.settings.shadow_color != undefined) shadow_color = res.settings.shadow_color;
-        if (res.settings.thick_stroke != undefined) thick_stroke = res.settings.thick_stroke;
-        if (res.settings.thin_stroke != undefined) thin_stroke = res.settings.thin_stroke;
-        if (res.settings.label_font != undefined) label_font = res.settings.label_font;
-        if (res.settings.global_widget_size != undefined) global_widget_size = res.settings.global_widget_size;
-        if (res.settings.label_font_size != undefined) label_font_size = res.settings.label_font_size;
-        if (res.settings.button_font_size != undefined) button_font_size = res.settings.button_font_size;
-        if (res.settings.fade_at_axis_center != undefined) fade_at_axis_center = res.settings.fade_at_axis_center;
-        if (res.settings.table_color != undefined) table_color = res.settings.table_color;
-        if (res.settings.chromakey_color != undefined) chromakey_color = res.settings.chromakey_color;
-        if (res.settings.fade_zone != undefined) fade_zone = res.settings.fade_zone;
-        if (res.settings.global_widget_radius != undefined) global_widget_radius = res.settings.global_widget_radius;
-        document.body.style['background-color'] = table_color;
-        for (var i in res.widgets) {
-            var w = res.widgets[i];
-            add_widget(container, w.widtype, w.params, w.pos.x, w.pos.y);
-        }
-        $t.id('seria_name').innerHTML = 'preset: ' + saved_presets.last;
-    } catch (e) {}
+        res = JSON.parse(str);
+    } catch (e) {
+        return;
+    }
+    if (!res) return;
+
+    // Added: only clear existing widgets after the payload has been validated.
+    clear_widgets();
+
+    var s = res.settings || {};
+    if (s.main_color != undefined) main_color = s.main_color;
+    if (s.back_color != undefined) back_color = s.back_color;
+    if (s.use_shadows != undefined) use_shadows = s.use_shadows;
+    if (s.shadow_color != undefined) shadow_color = s.shadow_color;
+    if (s.thick_stroke != undefined) thick_stroke = s.thick_stroke;
+    if (s.thin_stroke != undefined) thin_stroke = s.thin_stroke;
+    if (s.label_font != undefined) label_font = s.label_font;
+    if (s.global_widget_size != undefined) global_widget_size = s.global_widget_size;
+    if (s.label_font_size != undefined) label_font_size = s.label_font_size;
+    if (s.button_font_size != undefined) button_font_size = s.button_font_size;
+    if (s.fade_at_axis_center != undefined) fade_at_axis_center = s.fade_at_axis_center;
+    if (s.table_color != undefined) table_color = s.table_color;
+    if (s.chromakey_color != undefined) chromakey_color = s.chromakey_color;
+    if (s.fade_zone != undefined) fade_zone = s.fade_zone;
+    if (s.global_widget_radius != undefined) global_widget_radius = s.global_widget_radius;
+    document.body.style['background-color'] = table_color;
+
+    var ws = res.widgets || [];
+    for (var i in ws) {
+        var w = ws[i];
+        if (!w) continue;
+        add_widget(container, w.widtype, w.params, w.pos.x, w.pos.y);
+    }
+
+    $t.id('seria_name').innerHTML = saved_presets.last ? 'preset: ' + saved_presets.last : '';
 }
 
 function auto_update() {
@@ -1280,15 +1326,25 @@ function joy_initialize(container, w, h) {
 
     clear_widgets();
 
-    saved_presets = localStorage.getItem('saved_presets');
-    if (!saved_presets) saved_presets = { series: {}, last: undefined };
-    else saved_presets = JSON.parse(saved_presets);
+    var saved = load_presets_local();
+    if (!saved) {
+        saved_presets = { series: {}, last: undefined };
+    } else {
+        try {
+            saved_presets = JSON.parse(saved);
+        } catch (e) {
+            saved_presets = { series: {}, last: undefined };
+        }
+    }
+    if (!saved_presets.series) saved_presets.series = {};
 
     var params = $t.get_url_params(); 
     if (params.c) {
         saved_presets.last = undefined;
-        var c = decodeURIComponent(params.c);
-        deserialize_url(c, container);
+
+        // Added: get_url_params() already decodes the query value once.
+        deserialize_url(params.c, container);
+
         if (!params.norun) {
             global_run = true;
             switch_global_run();

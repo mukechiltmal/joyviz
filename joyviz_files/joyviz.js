@@ -157,12 +157,19 @@ joyviz.uuid = function() {
 }
 
 joyviz.get_url_params = function() {
-    var params = window.location.search.substring(1).split("&");
+    // Changed: parse query pairs on the first '=' only and skip empty pairs.
+    var search = window.location.search;
+    if (search && search[0] === '?') search = search.substring(1);
+
+    var pairs = search.split('&');
     var res = {};
-    for (var i in params) {
-        var keyvalue = params[i].split("=");
-        var key = keyvalue[0];
-        var value = keyvalue[1];
+
+    for (var i = 0; i < pairs.length; ++i) {
+        if (!pairs[i]) continue;
+
+        var eq = pairs[i].indexOf('=');
+        var key = eq === -1 ? pairs[i] : pairs[i].substring(0, eq);
+        var value = eq === -1 ? '' : pairs[i].substring(eq + 1);
 
         // Changed: use decodeURIComponent so encoded direct-link payloads decode correctly.
         try { key = decodeURIComponent(key); } catch (e) {}
@@ -170,6 +177,7 @@ joyviz.get_url_params = function() {
 
         res[key] = value;
     }
+
     return res;
 }
 
