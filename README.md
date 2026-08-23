@@ -1,3 +1,4 @@
+Cloned From https://github.com/SpaceCowboyLive/joyviz
 # joyviz
 Joystick Visualizer is an offline version based on the code of Anton Natarov (https://linkedin.com/in/antonnatarov/en)
 
@@ -11,4 +12,6 @@ Original documentation can be found here (https://web.archive.org/web/2022081818
 - update the code to beable to handle more than 4 deivces when not using a chrome based browser
 - keep the numbering of the devices but the overlay is bound to the hardware ID of the selected device. 
 When regeneration the overlay the number should be define from the hardware ID so that the overlay is kept konstant even if the order of the devices changes"
+To be Able to use more than 4 devices use a non chromium browser such as firefox.
+To Use this with obs you have to add firefox as a programm source and add a chromakey filter
 
